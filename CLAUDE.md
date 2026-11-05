@@ -1,0 +1,311 @@
+# Oval Financial Forum — site
+
+Marketing site for OFF, an Ohio State student organisation that publishes a
+monthly financial newsletter. Static SPA plus one serverless function.
+
+Directory is still named `agency-landing` from when this began as an agency
+landing-page study. The project is no longer that.
+
+## Stack
+
+- Vite 8 + React 19 + TypeScript
+- Tailwind v4 via `@tailwindcss/vite`. **All tokens live in
+  `src/index.css` `@theme`** — there is no `tailwind.config.js`
+- GSAP 3.15 + ScrollTrigger + SplitText (all free since 3.13)
+- Lenis smooth scroll, wired to GSAP's ticker
+- `three` / `@react-three/fiber` / `@react-three/drei` are installed but
+  **unused** — no WebGL anywhere. Remove them if nothing needs 3D
+- Deployed on Vercel from `main`. `api/` holds Node serverless functions;
+  Vite has no server runtime, so a dev-only middleware in `vite.config.ts`
+  mounts them into `npm run dev` (see Backend)
+
+- Sanity is the CMS for the two lists members maintain themselves — the team
+  and the newsletter issues. **No client library**: the dataset is public, so
+  the site reads it with plain `fetch` against the GROQ HTTP API. The Studio
+  is its own project in this repo, `production-website/`
+
+Commands: `npm run dev`, `npm run build`, `npm run lint` (oxlint),
+`node api/subscribe.test.mts`, `node api/issue.test.mts` and
+`node src/lib/sanity.test.mts` (self-checks).
+
+## Layout
+
+```
+src/
+  App.tsx            section order
+  content.ts         ALL copy — every section reads from here
+  index.css          @theme tokens, utilities, reduced-motion rules
+  lib/anim.ts        splitters, reveal hooks, curtain promise, Lenis setup
+  lib/analytics.ts   PostHog — lazy init, track(), per-route pageviews
+  lib/sanity.ts      useTeam / useIssues, the GROQ queries, row mapping
+  lib/sanity.test.mts  mapping self-check, no network
+  components/        Nav, Stairs, ScrollSpine, ScrollReset, PageHead, NewsletterField, Duotone, Seo
+  sections/          Hero, Intro, Services, Approach, Work, Team, Footer
+  pages/             Archive, TeamPage, Apply
+api/
+  subscribe.ts       POST { email } → Brevo contact; honeypot + rate limit
+  subscribe.test.mts assert-based self-check, stubs fetch
+production-website/  the Sanity Studio — separate project, own package.json
+  schemaTypes/       teamMember + newsletterIssue; `npx sanity deploy` to ship
+scripts/
+  migrate-team.mts   one-shot import of the 9 members into Sanity
+  seed-june-issue.mts  ditto for the June edition and its three files
+  seed-aug-issue.mts   ditto for August (rewrites /fonts and /img to the live origin)
+public/
+  fonts/             CormorantGaramond-var, MartianMono-400
+  team/              9 real member portraits
+  img/               banners (archive/team/joinus), logo_dark, ex1–ex3
+                     (Services plates), p1–p5 placeholders, june/aug covers
+  newsletter/2026/   june-2026 + aug-2026 html/pdf — published issues
+  robots.txt         Allow all; points at sitemap.xml
+  sitemap.xml        /, /archive, /team, /apply
+```
+
+Home section order: Hero → Intro → Services → Approach → Work → Team → Footer.
+
+Routes (`App.tsx`, react-router): `/` · `/archive` · `/team` · `/apply`,
+anything else redirects to `/`. `Seo` sets title/description/canonical per
+route. Every sub-page opens with `PageHead`; the Footer sits outside
+`<Routes>` and shows on all of them.
+
+Each file starts with a banner comment naming the part of the page it draws —
+grep `section N of 6` to jump to a home section.
+
+`design.md` is the design system — palette, type scale, grid, motion
+grammar, component inventory, and the gotchas list. Read it before changing
+anything visual.
+
+## Working rules
+
+- **Copy goes in `content.ts`, never inline in a component.** The only
+  exception is the hero's two wordmark lines. `team.members` and `issues` are
+  the two entries there that are only *fallbacks* — the live values come from
+  Sanity, so editing them changes what shows when the CMS is empty or
+  unreachable, not what members see.
+- **One easing curve** — `cubic-bezier(0.4, 0, 0.2, 1)`, which is also
+  Tailwind's default. Never add a bounce or elastic ease.
+- **The palette is closed.** 13 Ohio State values, all defined. Use an unused
+  token before inventing one.
+- **Never fade scarlet for small text** — it falls under WCAG AA. Use
+  `gray-dark-40` for de-emphasis. See design.md §2.
+- Every reveal respects `prefers-reduced-motion`.
+- Transition specific properties, not `all`.
+- Ask before adding a dependency.
+- **Anything animating above the fold waits on `curtainGone`** (from
+  `lib/anim.ts`), never a guessed `delay:` — the Stairs curtain covers the
+  first ~2.2s.
+- **Newsletter issues are hand-built HTML** under `public/newsletter/`, not
+  React. Their stylesheet mirrors the site's tokens by hand — same palette,
+  same two fonts (self-hosted from `/fonts/`), flat and square, one easing
+  curve. Keep the `@media print` block working: it produces the PDF.
+- Verify visually. `npm run dev` then screenshot in headless Chrome —
+  several bugs here (blanked paragraphs, glued words, unreadable contrast)
+  passed both build and lint and were only visible in a render. For *motion*,
+  drive a real clock over CDP; `--virtual-time-budget` distorts GSAP timing
+  badly enough to show the wrong frame or none at all.
+
+## Traps
+
+Full list with explanations in design.md §7. The short version:
+
+1. `splitChars` / `splitWords` rebuild an element from its `textContent`.
+   Nested markup inside a split target is destroyed — one element per line.
+2. StrictMode double-invokes effects; DOM-rewriting splitters need guards.
+3. Tailwind v4 emits `rotate-45` as the standalone `rotate` property, so
+   `getComputedStyle(...).transform` reads `none`. Not a bug.
+4. ScrollTrigger caches positions at creation and this page grows after
+   load — see Known issues.
+5. `gsap.from()` takes the element's current state as its *endpoint*, so
+   StrictMode's killed first timeline leaves it animating 0 → 0. Use `fromTo`
+   on anything paused at load.
+6. `.word` is an overflow-hidden mask; 3D rotation inside one is cropped flat.
+7. Grid auto-placement is **sparse**: an item with an explicit `col-start`
+   behind the cursor is pushed to a new row. Left-hand items must come first
+   in the DOM — `order-*` reorders placement but does not rewind the cursor.
+   See the Archive cover (`pages/Archive.tsx`).
+8. A stretched `<button>` centres its content box vertically whatever its
+   `display`. Team cards need `flex flex-col` on the shell, or a short card
+   floats mid-row.
+9. `Duotone`'s `ditherWidth` above the plate's on-screen width makes the
+   browser downscale 1-bit art; the interference reads as harsh noise. Match
+   it to the rendered size.
+
+## Backend — the subscribe endpoint
+
+`POST /api/subscribe { email, company }` → Brevo `POST /v3/contacts` with
+`updateEnabled: true`, so a returning address re-lists instead of erroring.
+
+- Env: `BREVO_API_KEY`, `BREVO_LIST_ID` (comma-separated ids; the live list
+  is **5**). Both in `.env.local` (gitignored) and in Vercel's env vars.
+- `company` is a honeypot — hidden from people, so anything in it is a bot.
+  The handler answers `200` and sends nothing to Brevo.
+- Rate limit: 5 per IP per 10 min, 60 per instance. **In-memory**, so it only
+  covers one warm lambda — marked with a `ponytail:` comment. Vercel's
+  firewall or Turnstile is the next rung if it draws real traffic.
+- `NewsletterField` reports the result in a native `<dialog>` (Escape, focus
+  trap and backdrop come free) and keeps the hint line as a quieter echo.
+
+## CMS — Sanity
+
+Project `gkbg7i6n` ("Production Website"), org `ov5RkHc5h`, dataset
+`production`, **public**. Studio at <https://ovalfinancialforum.sanity.studio/>,
+source in `production-website/` — schema changes need `npx sanity deploy` from
+there, since the hosted URL serves a build.
+
+Public means reads are unauthenticated, so there is no token and no
+`@sanity/client`: one `fetch` against
+`https://gkbg7i6n.apicdn.sanity.io/…/data/query/production`. The project id is
+not a secret and is hardcoded in `lib/sanity.ts` — do not move it to a `VITE_`
+var, that only adds a way for a deploy to break. If the dataset is ever made
+**private**, the query has to move into an `api/` function; a Sanity token in a
+`VITE_` var ships to every visitor's browser.
+
+Two types, both defined in `production-website/schemaTypes/`:
+
+- `teamMember` — `name`, `role`, `photo`, `bio`, `order`
+- `newsletterIssue` — `volume`, `title`, `publishedAt`, `dueMonth`, `blurb`,
+  `cover`, and the issue as two **file uploads**, `html` and `pdf`, so
+  publishing an edition needs no commit
+
+Renaming a field breaks the query *silently*: the row comes back with nulls and
+the section quietly falls back to `content.ts`. Both hooks also ignore an empty
+response, so an outage or an unpopulated type degrades to the hardcoded copy
+instead of blanking a section.
+
+Both types are populated: 9 members at `order` 10–90, and the June edition
+with its cover, HTML and PDF uploaded. `scripts/` holds the two one-shot
+seeders that put them there — they read from `src/content.ts` and `public/`,
+skip what already exists, and want `SANITY_EDIT_API_KEY` in `.env.local`.
+
+Gotchas:
+
+- `photo` has `hotspot: true`, and the site turns the hotspot into a CSS
+  `object-position`. That is what replaced the hand-tuned crop hints — a
+  member drags the crop circle in the Studio instead.
+- `<a download>` is ignored cross-origin, so PDFs from the CDN get `?dl=`
+  appended, which makes Sanity send `Content-Disposition: attachment`.
+- Issue HTML is opened through `GET /api/issue?src=`, same origin, so `/fonts`
+  and `/img` resolve. Only `cdn.sanity.io/files/gkbg7i6n/` URLs are allowed.
+- GROQ has no `trim()`. Trim in JS.
+- Data landing after mount changes section heights, which is what the
+  ScrollTrigger refresh in `lib/anim.ts` exists for.
+- The previous site's project, `mndx0824`, is **not ours** — publicly readable,
+  which is the only reason `scripts/migrate-team.mts` can read from it. It
+  stores the same people with `title` instead of `role` and the bio split
+  across `bioMain` + `bioOutside`.
+
+## Analytics — PostHog
+
+`lib/analytics.ts`. Two env vars, both client-side and neither secret:
+`VITE_POSTHOG_KEY` and `VITE_POSTHOG_HOST` (defaults to US cloud). A PostHog
+project key identifies a project, it does not authorise anything.
+
+**No key means no analytics, and no code either.** `KEY` is inlined at build
+time, so with it unset the whole `start()` body is dead and Rollup drops the
+dynamic import — `npm run dev` and preview builds stay silent by construction.
+Set the key and a separate ~76 kB gz chunk appears; the initial bundle does not
+change either way.
+
+The library is imported *after* `curtainGone`, so it never competes with the
+load sequence. `track()` is safe to call before that lands — events queue and
+replay in order. Never `await` it.
+
+Pageviews are sent by hand from `useAnalytics()` on every `pathname` change,
+because `capture_pageview: false` — the library's automatic one fires once and
+this is a single-page app.
+
+**Verifying it in headless Chrome shows nothing, and that is correct.**
+posthog-js drops events from bot user-agents, and headless Chrome announces
+itself as `HeadlessChrome`. The SDK still reports `__loaded: true`, a
+distinct_id, and `capture()` returning cleanly — it just never sends. Override
+the UA before concluding anything is broken:
+
+```
+Emulation.setUserAgentOverride  →  a normal Chrome UA
+```
+
+Then a load fires `POST /e/` and each route change fires `POST /i/v0/e/`.
+CDP's `Network.requestWillBeSent` is also unreliable here; patch `fetch` /
+`sendBeacon` / `XMLHttpRequest` via `Page.addScriptToEvaluateOnNewDocument`
+instead, so the hooks exist before PostHog captures its references.
+
+Named events, on top of autocapture: `newsletter_subscribed` /
+`newsletter_failed` (with `where`, hero or footer, so the two placements can be
+compared), `issue_read` (`volume`, `from`), `issue_downloaded`, `apply_clicked`
+(`where`). No email address is ever sent — a signup event says that somebody
+subscribed, not who.
+
+## Current state
+
+Built and working: all seven home sections plus three sub-pages, Stairs load
+curtain, sliding staircase, hover-expand accordion, tilted cards that
+straighten at viewport centre, team grid with expandable bios, dithered
+duotone hero with flip-board wordmark, sub-page banners (photo + dither,
+panel drop → scramble headline → line wipe → page rises), dotted "coming
+soon" issue plates, three-plate overlapping collage in Services, mobile
+hamburger menu, centre-out hover fills on the nav, working newsletter signup,
+and the June issue online at `/newsletter/2026/june-2026.html`.
+
+Builds and lints clean; `node api/subscribe.test.mts` passes.
+
+## Known issues / next up
+
+- [ ] **No "coming up soon" plate** — the CMS holds the published issues, so
+      the home row is only real cards. Create a `newsletterIssue` with the next
+      `volume` and `dueMonth`, no `publishedAt`, and it comes back.
+- [ ] **The June issue exists twice** — in the CMS as uploads, and still in
+      `public/newsletter/2026/` as the `content.ts` fallback. The site serves
+      the CMS copy, so the 1.3 MB file in the repo is now dead weight on every
+      deploy. Decide whether the fallback is worth its size.
+- [ ] **Mobile** — home, /team and /archive checked at 390px; /apply and the
+      newsletter issue below 640px are still unverified.
+- [ ] **Leftover agency links** — Services' "View all services" and Work's
+      "View all projects" point at anchors that go nowhere.
+- [ ] **Placeholder images** — `public/img/p1–p5.jpg` are Picsum stock; only
+      the June cover still uses one.
+- [ ] **June HTML is 1.3 MB** — six inline base64 images. August extracts
+      photos to `public/img/newsletter/aug-2026/`; June still inlines.
+- [ ] Two team portraits are non-square. In the CMS this is solved — `photo`
+      has a hotspot, and the migration seeds one for those two. The `focus`
+      values left in `content.ts` only matter while the dataset is empty.
+- [ ] Nothing on `/team` links to `/apply` any more — only the nav does.
+- [ ] Unused: `src/assets/hero.png`, `public/favicon.svg`, and the three.js
+      dependency set.
+- [ ] **OG image is the wordmark**, not a 1200×630 share card. Fine for
+      search; a dedicated raster would look better in iMessage and Slack.
+
+## Progress log
+
+Append one line per session: date — area — what landed.
+
+- 2026-07-30 — setup — Vite/React/TS scaffold, Tailwind v4, deps
+- 2026-07-30 — build — full single-page site from design.md; verified in headless Chrome
+- 2026-07-30 — restructure — donor section order, 6/12 grid, char + line splitting; fixed 2 StrictMode text bugs
+- 2026-07-30 — video pass — grid rules, stairs block, accordion, tilt cards, photo duotone
+- 2026-07-30 — section pass — dither restored on hero, stepped block rebuilt
+- 2026-07-30 — palette — Ohio State scarlet/gray, muted-text contrast fixed
+- 2026-07-30 — team — Testimonials replaced with 3×3 Team grid
+- 2026-07-31 — content — real team photos wired, hero to single line, nav links centred, hero newsletter field
+- 2026-07-31 — type — Switzer replaced with Cormorant Garamond; text scale +10%, tracking loosened
+- 2026-07-31 — motion — SplitText ink-bleed on intro copy; hover padding + hover-expand + rotating `+` on services
+- 2026-07-31 — docs — design.md and CLAUDE.md rewritten for OFF; noted ScrollTrigger drift as outstanding
+- 2026-08-01 — team — /team grid to 5 columns; bio modal replaced with full-row expansion strip (MemberModal deleted)
+- 2026-08-01 — banners — photo backgrounds + faint dither on /archive, /team, /apply mastheads; PageHead load sequence (panel drops, text line-wipes, page rises), gated on the Stairs curtain via `curtainGone`
+- 2026-08-01 — motion — banner headlines scramble (ScrambleTextPlugin); hero wordmark flips word by word; Approach cards straighten at viewport centre; unpublished issue plates cycle "Coming up soon!" against their due month
+- 2026-08-02 — mobile — hamburger menu below md; Approach scatter offset scoped to lg; /team two columns; Work two columns; card rows top-aligned (stretched-button centring)
+- 2026-08-02 — nav — centre-out white fill on hover for section links and Apply, arrow that grows the Apply button, mark rotates and magnifies
+- 2026-08-02 — services — single plate replaced with three overlapping duotone/dither plates (ex1–ex3), staggered entry + scrubbed drift; Lenis to a heavier glide
+- 2026-08-02 — backend — Brevo signup wired (`api/subscribe.ts`), result modal, honeypot + per-IP rate limit, dev-only Vite middleware so `/api` works in `npm run dev`
+- 2026-08-02 — newsletter — June issue published under `public/newsletter/2026/`; its stylesheet rebuilt on the site's tokens; /archive links to the HTML and offers a direct PDF download
+- 2026-08-02 — work — June cover on the Work card, whole card links to the issue, arrow plate in the cover's bottom-left that widens on hover; real Instagram/LinkedIn URLs in the footer
+- 2026-08-04 — analytics — PostHog behind a lazy import gated on the curtain; per-route pageviews, named events for signups, issue reads, PDF downloads and Apply; no key means no code shipped
+- 2026-08-04 — cms — site reads Sanity through plain fetch (no client library); team grid off `teamMember`, hotspot drives the portrait crop; `work.items` + `archive.issues` merged into one `issues` list feeding both; ScrollTrigger refresh landed; migration script for the old project's members
+- 2026-08-03 — polish — newsletter covers show as plain photos (duotone dropped on Work + /archive); sub-page headlines type out instead of scrambling; Services heading is one centred line on the standard char reveal (spread scrub removed); staircase rects bleed 1px to kill a device-only seam; mobile Apply moved from the bar into the hamburger drawer
+- 2026-08-16 — apply — recruitment timeline on /apply: Aug 26 7pm and Sep 1 8:30pm info sessions, location TBD, scarlet band
+- 2026-08-16 — apply — timeline rebuilt as a vertical grey graph; scarlet fill grows with elapsed dates, nodes stay on every stop
+- 2026-08-21 — apply — load prompt after the Stairs curtain: currently accepting applications, links to /apply
+- 2026-08-26 — newsletter — August edition styled on the June tokens, images extracted, fallback + Sanity seed
+- 2026-08-26 — team — LinkedIn and mail icons on /team, name left / icons right
+- 2026-08-26 — cms — Read issue opens the Sanity HTML through /api/issue, so Studio uploads go live without a commit
+- 2026-08-26 — seo — per-route titles, sitemap, robots, JSON-LD; home title names OSU finance club
+- 2026-09-14 — motion — stairs route reprise; /team photo parallax; Intro two-stage stairs; desktop home scroll spine

@@ -1,0 +1,155 @@
+import { useRef, useState } from "react";
+import { track } from "../lib/analytics";
+
+/**
+ * Subscribe field — bordered box plus a solid square submit. Used by the hero
+ * and the footer, so the two never drift apart. Posts to /api/subscribe, which
+ * adds the address to the Brevo list (see api/subscribe.ts).
+ */
+export default function NewsletterField({
+  id,
+  hint,
+  className = "",
+  inputFill = "bg-transparent",
+}: {
+  /** unique per instance — the hero and footer are both mounted at once */
+  id: string;
+  hint: string;
+  className?: string;
+  /** field fill — the hero tints it so the box reads against the dithered photo */
+  inputFill?: string;
+}) {
+  const hintId = `${id}-hint`;
+  const [email, setEmail] = useState("");
+  const [state, setState] = useState<"idle" | "sending" | "done" | "error">(
+    "idle",
+  );
+  const [error, setError] = useState("");
+  // honeypot — hidden from people, irresistible to form-filling bots
+  const [company, setCompany] = useState("");
+  // native <dialog>: Escape, focus trap and the backdrop come for free
+  const modal = useRef<HTMLDialogElement>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (state === "sending") return;
+    setState("sending");
+
+    try {
+      const res = await fetch("/api/subscribe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, company }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+
+      if (res.ok) {
+        setState("done");
+        setEmail("");
+        // `where` separates the hero field from the footer one, so the numbers
+        // say which placement actually converts. The address itself is never
+        // sent — PostHog does not need to know who subscribed, only that
+        // somebody did. A honeypot hit answers 200 like any other success, so
+        // it is flagged here rather than counted as a signup.
+        track("newsletter_subscribed", { where: id, bot: Boolean(company) });
+      } else {
+        setError(data.error ?? "Could not subscribe right now");
+        setState("error");
+        track("newsletter_failed", { where: id, reason: data.error ?? "unknown" });
+      }
+    } catch {
+      setError("Could not reach the server");
+      setState("error");
+      track("newsletter_failed", { where: id, reason: "network" });
+    }
+    modal.current?.showModal();
+  };
+
+  return (
+    <form className={className} onSubmit={submit}>
+      <div className="flex items-stretch">
+        <label htmlFor={id} className="sr-only">
+          Email address
+        </label>
+        <input
+          type="text"
+          name="company"
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden
+          value={company}
+          onChange={(e) => setCompany(e.target.value)}
+          className="pointer-events-none absolute h-0 w-0 opacity-0"
+        />
+        <input
+          id={id}
+          type="email"
+          required
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            if (state !== "idle") setState("idle");
+          }}
+          disabled={state === "sending"}
+          placeholder="Your email…"
+          aria-describedby={hintId}
+          className={`text-body-s min-w-0 flex-1 border-1 border-white ${inputFill} px-4 py-3 font-bold text-white outline-none transition-colors placeholder:font-bold placeholder:text-white placeholder:opacity-100 focus-visible:border-white`}
+        />
+        <button
+          type="submit"
+          disabled={state === "sending"}
+          aria-label="Subscribe to the newsletter"
+          className="grid aspect-square w-12 shrink-0 place-items-center bg-white text-scarlet transition-opacity duration-200 hover:opacity-80 disabled:opacity-60"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden>
+            <path
+              d="M7 17L17 7M17 7H8M17 7v9"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      {/* the hint doubles as the status line, so the box never shifts height */}
+      <p
+        id={hintId}
+        aria-live="polite"
+        className="label text-label-s mt-3 text-white"
+      >
+        {state === "done"
+          ? "You are on the list."
+          : state === "error"
+            ? error
+            : hint}
+      </p>
+
+      {/* result modal — same copy as the status line, but unmissable */}
+      <dialog
+        ref={modal}
+        className="dither-weak m-auto w-[min(28rem,calc(100vw-3rem))] border border-white bg-scarlet p-8 text-white backdrop:bg-gray-dark-40/60"
+      >
+        <h2 className="text-heading font-semibold">
+          {state === "done"
+            ? "You are on the list!"
+            : "That did not go through"}
+        </h2>
+        <p className="label text-label-s mt-4 leading-relaxed">
+          {state === "done"
+            ? "Thank you for subscribing to our newsletter! The next issue will land in your inbox."
+            : error}
+        </p>
+        <button
+          type="button"
+          autoFocus
+          onClick={() => modal.current?.close()}
+          className="label text-label-s mt-8 w-full bg-white py-3 text-scarlet transition-opacity duration-200 hover:opacity-80"
+        >
+          {state === "done" ? "Close" : "Try again"}
+        </button>
+      </dialog>
+    </form>
+  );
+}

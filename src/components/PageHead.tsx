@@ -1,0 +1,164 @@
+import { useEffect, useRef, useState } from "react";
+import gsap from "gsap";
+import Duotone from "./Duotone";
+import { curtainGone, splitChars, splitLines } from "../lib/anim";
+
+/** Same cut as Tailwind `lg` — PageHead's padding and copy grid flip here too. */
+const LG = "(min-width: 1024px)";
+
+/**
+ * Scarlet masthead every sub-page opens with. Sits under the fixed nav, so
+ * the top padding clears it.
+ *
+ * Load sequence: the panel drops in as a solid block, its text wipes up line
+ * by line once it lands, then everything below the banner rises. None of it
+ * is scroll-driven — the whole page above the fold settles in one pass.
+ */
+export default function PageHead({
+  eyebrow,
+  headline,
+  intro,
+  bg,
+  bgDesktop,
+}: {
+  eyebrow: string;
+  headline: string;
+  intro: string;
+  /** optional banner photo; shown as-is under a scarlet wash */
+  bg?: string;
+  /** from `lg` up; replaces `bg` and skips the dither plate */
+  bgDesktop?: string;
+}) {
+  const root = useRef<HTMLElement>(null);
+  const copy = useRef<HTMLDivElement>(null);
+  const title = useRef<HTMLHeadingElement>(null);
+  const [desktop, setDesktop] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(LG).matches,
+  );
+
+  useEffect(() => {
+    if (!bgDesktop) return;
+    const mq = window.matchMedia(LG);
+    const sync = () => setDesktop(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, [bgDesktop]);
+
+  const desktopPlate = Boolean(bgDesktop && desktop);
+  const src = desktopPlate ? bgDesktop : bg;
+
+  useEffect(() => {
+    const el = root.current;
+    const block = copy.current;
+    const h1 = title.current;
+    if (!el || !block || !h1) return;
+
+    // headline types out character by character; the rest wipes by line
+    const chars = splitChars(h1);
+    const lines = Array.from(block.children)
+      .filter((child) => child !== h1)
+      .flatMap((child) => splitLines(child as HTMLElement));
+    // siblings are the page's own sections — hidden until the banner is done
+    const below = Array.from(el.parentElement?.children ?? []).filter(
+      (n) => n !== el,
+    );
+
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    // hide the words now, not on play — the gap between mount and the
+    // timeline starting sits behind the stairs (load or route reprise)
+    gsap.set(chars, { autoAlpha: 0 });
+
+    // paused, but the fromTo start values render now — the panel is parked
+    // above the fold and the copy is hidden before the curtain lifts
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo(
+      el,
+      { yPercent: -100 },
+      { yPercent: 0, duration: 0.45, ease: "expo.out" },
+    )
+      // typewriter: each letter simply appears, no cursor. autoAlpha toggles
+      // visibility, so the line holds its final width and nothing reflows.
+      .to(
+        chars,
+        {
+          autoAlpha: 1,
+          duration: 0,
+          ease: "none",
+          stagger: 0.02,
+        },
+        "+=0.1",
+      )
+      .fromTo(
+        lines,
+        { yPercent: 110 },
+        { yPercent: 0, duration: 0.6, ease: "expo.out", stagger: 0.05 },
+      )
+      // the body starts rising while the lines are still wiping so the
+      // sequence after the curtain lands ~1.1s in rather than ~2.7s.
+      .fromTo(
+        below,
+        { y: 24, autoAlpha: 0 },
+        { y: 0, autoAlpha: 1, duration: 0.5, ease: "expo.out" },
+        "-=0.45",
+      );
+
+    let cancelled = false;
+    curtainGone.then(() => {
+      if (!cancelled) tl.play();
+    });
+
+    return () => {
+      cancelled = true;
+      tl.kill();
+    };
+  }, []);
+
+  return (
+    <header ref={root} className="relative isolate bg-scarlet text-white">
+      {src && (
+        <div className="absolute inset-0 -z-10">
+          <img
+            src={src}
+            alt=""
+            aria-hidden="true"
+            className="size-full object-cover"
+          />
+          {/* same dithered plate as the hero, held at low opacity — texture
+              over the photo instead of replacing it. The desktop /team
+              portrait is already a finished frame, so it skips this. */}
+          {!desktopPlate && (
+            <div className="absolute inset-0 opacity-50">
+              <Duotone src={src} gamma={2.2} dither ditherWidth={440} />
+            </div>
+          )}
+
+          {/* scarlet wash keeps the photo legible while white type holds AA */}
+          <div className="absolute inset-0 bg-scarlet/65 mix-blend-multiply" />
+          <div className="absolute inset-0 bg-scarlet/25" />
+        </div>
+      )}
+
+      <div
+        ref={copy}
+        className="grid-page px-6 pt-36 pb-20 lg:px-15 lg:pt-48 lg:pb-28"
+      >
+        <p className="label text-label-s col-span-6 opacity-70 lg:col-span-12">
+          {eyebrow}
+        </p>
+
+        <h1
+          ref={title}
+          className="text-display-l col-span-6 mt-6 font-semibold lg:col-span-7 lg:mt-8"
+        >
+          {headline}
+        </h1>
+
+        <p className="text-body-l col-span-6 mt-8 max-w-[46ch] lg:col-span-4 lg:col-start-9 lg:mt-8">
+          {intro}
+        </p>
+      </div>
+    </header>
+  );
+}
