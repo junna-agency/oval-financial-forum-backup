@@ -163,6 +163,18 @@ export const issues: Issue[] = [
     published: true,
     due: "",
   },
+  {
+    volume: 5,
+    title: "October Edition",
+    blurb:
+      "The Nasdaq fell 5.3% after a late tech sell-off, the 10-year yield touched 5.31%, and the Fed held rates at 3.75% to 4.00%.",
+    cover: "/img/oct-2026.jpg",
+    html: "/newsletter/2026/oct-2026.html",
+    pdf: "/newsletter/2026/oct-2026.pdf",
+    date: "Published : 11/17/2026",
+    published: true,
+    due: "",
+  },
 ];
 
 export const team = {
